@@ -6,10 +6,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Uri};
 use log::{debug, error, info, trace, warn};
 use serde_json::Value;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{cmp::Ordering, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 use tokio::process::Command;
 
 const YTDL: &str = "yt-dlp";
@@ -65,12 +62,9 @@ async fn handle_request(
     client: Client,
     cache: Cache,
 ) -> Result<Response<Body>> {
-    let (input, is_asking_cover) = extract_input(request.uri().path_and_query().unwrap().as_str())?;
+    let (input, cover_ext, is_asking_cover) =
+        extract_input(request.uri().path_and_query().unwrap().as_str())?;
     info!("received input: {input}");
-
-    if is_asking_cover {
-        Err(anyhow!("Asked for cover."))?
-    }
 
     let info = if let Some(info) = cache.get(&input) {
         info
@@ -86,33 +80,51 @@ async fn handle_request(
             .expect(r#""input" to be equal to one "original_url""#)
     };
 
-    let stream_url = stream_url_from_info(&info)?;
-    debug!("stream_url: {:?}", stream_url.get(0..65));
+    let proxied_url = if is_asking_cover {
+        cover_url_from_info(&info, &cover_ext)?
+    } else {
+        stream_url_from_info(&info)?
+    };
 
-    *request.uri_mut() = Uri::from_str(stream_url)?;
+    debug!("proxied_url: {}", proxied_url);
+
+    *request.uri_mut() = Uri::from_str(proxied_url)?;
     request.headers_mut().remove("host");
+
     trace!("request: {request:#?}");
     let response = client.request(request).await?;
-    trace!("response: {response:#?}");
+    debug!("response: {response:#?}");
 
     Ok(response)
 }
 
-fn extract_input(path_and_query: &str) -> Result<(String, bool)> {
+fn extract_input(path_and_query: &str) -> Result<(String, String, bool)> {
     let (input, last) = path_and_query.rsplit_once('/').unwrap_or_default();
-    let is_asking_cover = last.starts_with("cover");
+
+    let is_asking_cover = last.starts_with("cover.");
     if !last.is_empty() && !is_asking_cover {
         Err(anyhow!("No '/' or '/cover.*' after the URL."))?
     }
+
     let input = input.trim_start_matches('/');
     if input.is_empty() {
         Err(anyhow!("Empty URL. {USAGE}"))?
     }
-    Ok((input.to_string(), is_asking_cover))
+
+    let cover_ext = if is_asking_cover {
+        let cover_ext = last.split_once('.').expect("cover to have a '.'").1;
+        if cover_ext.is_empty() {
+            Err(anyhow!("cover asked has no extension"))?
+        }
+        cover_ext.to_string()
+    } else {
+        String::new()
+    };
+
+    Ok((input.to_string(), cover_ext, is_asking_cover))
 }
 
 fn key_from_info(info: &Value) -> Result<&str> {
-    // maybe webpage_url
     info.get("original_url")
         .ok_or(anyhow!("no \"original_url\" present in info"))?
         .as_str()
@@ -124,6 +136,34 @@ fn stream_url_from_info(info: &Value) -> Result<&str> {
         .ok_or(anyhow!("no \"url\" present in info"))?
         .as_str()
         .ok_or(anyhow!("\"url\" is not a string"))
+}
+
+fn cover_url_from_info<'a>(info: &'a Value, cover_ext: &str) -> Result<&'a str> {
+    struct Thumb<'a> {
+        url: &'a str,
+        preference: i64,
+    }
+
+    info.get("thumbnails")
+        .ok_or(anyhow!("no \"thumbnails\" present in info"))?
+        .as_array()
+        .ok_or(anyhow!("\"thumbnails\" is not a array"))?
+        .iter()
+        .filter_map(|t| {
+            Some(Thumb {
+                url: t.get("url")?.as_str()?,
+                preference: t.get("preference")?.as_i64()?,
+            })
+        })
+        .filter(|t| t.url.ends_with(cover_ext))
+        .reduce(|prev, next| match prev.preference.cmp(&next.preference) {
+            Ordering::Less | Ordering::Equal => next,
+            Ordering::Greater => prev,
+        })
+        .map(|t| t.url)
+        .ok_or(anyhow!(
+            "no valid thumbnail found for extension '{cover_ext}'"
+        ))
 }
 
 async fn ask_stream_infos(input: &str) -> Result<Vec<Value>> {
@@ -152,26 +192,5 @@ async fn ask_stream_infos(input: &str) -> Result<Vec<Value>> {
             Ok(infos)
         }
         false => Err(anyhow!("child process failed to gather info."))?,
-    }
-}
-
-#[allow(unused)]
-async fn ask_stream_url(input: &str) -> Result<String> {
-    let child = Command::new(YTDL)
-        .args(["-f", "bestaudio", "-g", input])
-        .stdout(std::process::Stdio::piped())
-        .spawn()?;
-
-    let output = child.wait_with_output().await?;
-
-    match output.status.success() {
-        true => {
-            let stream_url = std::str::from_utf8(&output.stdout)?.trim_end().to_string();
-            if stream_url.is_empty() {
-                Err(anyhow!("received empty stream_url from {YTDL}."))?
-            }
-            Ok(stream_url)
-        }
-        false => Err(anyhow!("child process failed."))?,
     }
 }
