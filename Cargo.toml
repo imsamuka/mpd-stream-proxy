@@ -11,3 +11,5 @@ hyper = { version = "0.14.24", features = ["full"] }
 hyper-tls = "0.5.0"
 simple_logger = { version = "4.0.0", features = ["stderr", "colors"], default-features = false }
 log = "0.4.17"
+serde = "1.0.152"
+serde_json = "1.0.91"
