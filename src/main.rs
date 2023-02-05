@@ -8,29 +8,38 @@ use log::{debug, error, info, trace, warn};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
-//use {std::time::Duration, tokio::time::sleep};
 
 const YTDL: &str = "yt-dlp";
 const USAGE: &str = "Usage: GET /<URL>/[cover.*]";
 
 type Client = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
+type Cache = moka::future::Cache<String, Arc<Value>>;
 
 #[tokio::main]
 async fn main() {
     simple_logger::init_with_env().unwrap();
 
     let client = hyper::Client::builder().build::<_, Body>(hyper_tls::HttpsConnector::new());
+    let cache = Cache::builder()
+        .initial_capacity(10)
+        .time_to_live(Duration::from_secs(600))
+        .build();
 
     // A `MakeService` that produces a `Service` to handle each connection.
     let make_service = make_service_fn(move |_socket| {
         let client = client.clone();
+        let cache = cache.clone();
 
         // Create a `Service` for responding to the request.
         let service = service_fn(move |request| {
             let client = client.clone();
+            let cache = cache.clone();
+
             async {
-                handle_request(request, client).await.or_else(|e| {
+                handle_request(request, client, cache).await.or_else(|e| {
                     error!("Request error: {e}");
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -51,7 +60,11 @@ async fn main() {
     }
 }
 
-async fn handle_request(mut request: Request<Body>, client: Client) -> Result<Response<Body>> {
+async fn handle_request(
+    mut request: Request<Body>,
+    client: Client,
+    cache: Cache,
+) -> Result<Response<Body>> {
     let (input, is_asking_cover) = extract_input(request.uri().path_and_query().unwrap().as_str())?;
     info!("received input: {input}");
 
@@ -59,15 +72,28 @@ async fn handle_request(mut request: Request<Body>, client: Client) -> Result<Re
         Err(anyhow!("Asked for cover."))?
     }
 
-    let input_info = ask_stream_infos(&input).await?;
-    let stream_url = stream_url_from_info(&input_info[0])?;
+    let info = if let Some(info) = cache.get(&input) {
+        info
+    } else {
+        info!("updating cache");
+
+        for info in ask_stream_infos(&input).await? {
+            let key = key_from_info(&info)?.to_string();
+            cache.insert(key, Arc::new(info)).await;
+        }
+        cache
+            .get(&input)
+            .expect(r#""input" to be equal to one "original_url""#)
+    };
+
+    let stream_url = stream_url_from_info(&info)?;
     debug!("stream_url: {:?}", stream_url.get(0..65));
 
     *request.uri_mut() = Uri::from_str(stream_url)?;
     request.headers_mut().remove("host");
-    debug!("request: {request:#?}");
+    trace!("request: {request:#?}");
     let response = client.request(request).await?;
-    debug!("response: {response:#?}");
+    trace!("response: {response:#?}");
 
     Ok(response)
 }
@@ -83,6 +109,14 @@ fn extract_input(path_and_query: &str) -> Result<(String, bool)> {
         Err(anyhow!("Empty URL. {USAGE}"))?
     }
     Ok((input.to_string(), is_asking_cover))
+}
+
+fn key_from_info(info: &Value) -> Result<&str> {
+    // maybe webpage_url
+    info.get("original_url")
+        .ok_or(anyhow!("no \"original_url\" present in info"))?
+        .as_str()
+        .ok_or(anyhow!("\"original_url\" is not a string"))
 }
 
 fn stream_url_from_info(info: &Value) -> Result<&str> {

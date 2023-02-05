@@ -13,3 +13,4 @@ simple_logger = { version = "4.0.0", features = ["stderr", "colors"], default-fe
 log = "0.4.17"
 serde = "1.0.152"
 serde_json = "1.0.91"
+moka = { version = "0.9.6", features = ["future"] }
