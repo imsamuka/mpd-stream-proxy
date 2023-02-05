@@ -9,4 +9,5 @@ futures = "0.3.26"
 tokio = { version = "1.25.0", features = ["full"] }
 hyper = { version = "0.14.24", features = ["full"] }
 hyper-tls = "0.5.0"
-
+simple_logger = { version = "4.0.0", features = ["stderr", "colors"], default-features = false }
+log = "0.4.17"

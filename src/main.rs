@@ -4,6 +4,7 @@ use anyhow::{anyhow, Error, Result};
 use futures::TryFutureExt;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode, Uri};
+use log::{debug, error, info as _, warn as _};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tokio::process::Command;
@@ -17,6 +18,8 @@ type Client = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnect
 
 #[tokio::main]
 async fn main() {
+    simple_logger::init_with_level(log::Level::Debug).unwrap();
+
     let client = hyper::Client::builder().build::<_, Body>(hyper_tls::HttpsConnector::new());
 
     // A `MakeService` that produces a `Service` to handle each connection.
@@ -28,7 +31,7 @@ async fn main() {
             let client = client.clone();
             async {
                 handle_request(request, client).await.or_else(|e| {
-                    eprintln!("{e}");
+                    error!("Request error: {e}");
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body(Body::empty())
@@ -41,20 +44,19 @@ async fn main() {
     });
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 4000));
-
     let server = Server::bind(&addr).serve(make_service);
 
     if let Err(e) = server.await {
-        eprintln!("server error: {e}");
+        error!("Server error: {e}");
     }
 }
 
 async fn handle_request(mut request: Request<Body>, client: Client) -> Result<Response<Body>> {
     let (input, is_asking_cover) = extract_input(request.uri().path_and_query().unwrap().as_str())?;
-    dbg!(&input);
+    debug!("input: {input}");
 
     if is_asking_cover {
-        dbg!("Asked for cover. NOT FOUND.");
+        error!("Asked for cover.");
         return Ok::<_, Error>(
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -63,13 +65,13 @@ async fn handle_request(mut request: Request<Body>, client: Client) -> Result<Re
     }
 
     let stream_url = ask_stream_url(input).await?;
-    dbg!(stream_url.get(0..65));
+    debug!("stream_url: {:?}", stream_url.get(0..65));
 
     *request.uri_mut() = Uri::from_str(&stream_url)?;
     request.headers_mut().remove("host");
-    dbg!(&request);
+    debug!("request: {request:#?}");
     let response = client.request(request).await?;
-    dbg!(&response);
+    debug!("response: {response:#?}");
 
     Ok(response)
 }
