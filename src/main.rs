@@ -1,10 +1,9 @@
 #![allow(unused_imports)]
 
 use anyhow::{anyhow, Error, Result};
-use hyper::body::HttpBody;
+use futures::TryFutureExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Server, StatusCode, Uri};
-use hyper_tls::HttpsConnector;
+use hyper::{Body, Request, Response, Server, StatusCode, Uri};
 use std::net::SocketAddr;
 use std::str::FromStr;
 use tokio::process::Command;
@@ -14,44 +13,26 @@ use tokio::process::Command;
 const YTDL: &str = "yt-dlp";
 const USAGE: &str = "Usage: GET /<URL>/[cover.*]";
 
+type Client = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
+
 #[tokio::main]
 async fn main() {
-    let client = Client::builder().build::<_, hyper::Body>(HttpsConnector::new());
+    let client = hyper::Client::builder().build::<_, Body>(hyper_tls::HttpsConnector::new());
 
     // A `MakeService` that produces a `Service` to handle each connection.
     let make_service = make_service_fn(move |_socket| {
         let client = client.clone();
 
         // Create a `Service` for responding to the request.
-        let service = service_fn(move |mut request| {
+        let service = service_fn(move |request| {
             let client = client.clone();
-
-            async move {
-                let (input, is_asking_cover) =
-                    extract_input(request.uri().path_and_query().unwrap().as_str())?;
-                dbg!(&input);
-
-                if is_asking_cover {
-                    dbg!("Asked for cover. NOT FOUND.");
-                    return Ok::<_, Error>(
-                        Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Body::empty())?,
-                    );
-                }
-
-                let stream_url = ask_stream_url(input).await?;
-                dbg!(stream_url.get(0..65));
-
-                *request.uri_mut() = Uri::from_str(&stream_url)?;
-                request.headers_mut().remove("host");
-                dbg!(&request);
-                let response = client.request(request).await?;
-
-                dbg!(&response);
-
-                Ok::<_, Error>(response)
-                // Ok::<_, Error>(Response::<Body>::default())
+            async {
+                handle_request(request, client).await.or_else(|e| {
+                    eprintln!("{e}");
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                })
             }
         });
 
@@ -66,6 +47,31 @@ async fn main() {
     if let Err(e) = server.await {
         eprintln!("server error: {e}");
     }
+}
+
+async fn handle_request(mut request: Request<Body>, client: Client) -> Result<Response<Body>> {
+    let (input, is_asking_cover) = extract_input(request.uri().path_and_query().unwrap().as_str())?;
+    dbg!(&input);
+
+    if is_asking_cover {
+        dbg!("Asked for cover. NOT FOUND.");
+        return Ok::<_, Error>(
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())?,
+        );
+    }
+
+    let stream_url = ask_stream_url(input).await?;
+    dbg!(stream_url.get(0..65));
+
+    *request.uri_mut() = Uri::from_str(&stream_url)?;
+    request.headers_mut().remove("host");
+    dbg!(&request);
+    let response = client.request(request).await?;
+    dbg!(&response);
+
+    Ok(response)
 }
 
 fn extract_input(path_and_query: &str) -> Result<(String, bool)> {
