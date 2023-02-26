@@ -5,15 +5,15 @@ This is in a very Beta stage, and i have no interest in continuing it.
 Fell free to send Issues, PRs or fork the project, if you want to support it.
 
 ## Quickstart
-
-1. Run the proxy. e.g. with `cargo run`
-2. Add a entry in the MPD queue.
+1. Install rust and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+2. Run the proxy. e.g. with `cargo run`
+3. Add a entry in the MPD queue.
 ```
 # Assuming the MPD server is running in the same machine as the proxy
 # Also, the trailing '/' is very important, don't forget it
 mpc insert 'http://localhost:4000/https://www.youtube.com/watch?v=dQw4w9WgXcQ/'
 ```
-3. Profit.
+4. Profit.
 
 ## How it works
 
