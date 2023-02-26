@@ -598,7 +598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mpd-streamart"
+name = "mpd-stream-proxy"
 version = "0.1.0"
 dependencies = [
  "anyhow",

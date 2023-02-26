@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Error, Result};
-use hyper::{body::HttpBody, Body, Request, Response, Server, StatusCode, Uri};
+use hyper::{Body, Request, Response, Server, StatusCode, Uri};
 
 use log::{debug, error, info, trace, warn};
 use moka::future::Cache;
@@ -52,6 +52,7 @@ async fn main() {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 4000));
     let server = Server::bind(&addr).serve(make_service);
 
+    info!("Running server: http://127.0.0.1:4000/");
     if let Err(e) = server.await {
         error!("Server error: {e}");
     }

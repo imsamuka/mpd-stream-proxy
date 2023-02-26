@@ -6,7 +6,7 @@ Fell free to send Issues, PRs or fork the project, if you want to support it.
 
 ## Quickstart
 1. Install rust and [yt-dlp](https://github.com/yt-dlp/yt-dlp).
-2. Run the proxy. e.g. with `cargo run`
+2. Run the proxy. Example with `RUST_LOG=DEBUG cargo run`. Use `INFO` for a more quiet output.
 3. Add a entry in the MPD queue.
 ```
 # Assuming the MPD server is running in the same machine as the proxy
